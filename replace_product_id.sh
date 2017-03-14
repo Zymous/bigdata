@@ -1,0 +1,1 @@
+sed -i "s%product_id=%http://archive-shop.vip.com/detail-0-%" wp_origin1

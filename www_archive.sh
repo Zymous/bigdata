@@ -1,0 +1,1 @@
+sed -i "s%www%archive-shop%" wp_origin
