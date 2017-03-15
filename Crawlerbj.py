@@ -1,5 +1,8 @@
 #coding: utf-8
 #"it's a oop trying"
+import sys 
+reload(sys) 
+sys.setdefaultencoding('utf-8')
 import urllib2
 import re
 import pdb
@@ -8,26 +11,29 @@ from bs4 import BeautifulSoup
 import multiprocessing
 import redis
 import datetime
-import MySQLdb
+#import MySQLdb
 import pdb
 import time
 import threading
+import multiprocessing
 import traceback
-socket.setdefaulttimeout(5)
+socket.setdefaulttimeout(10)
 
 SLEEP_TIME = 1
 
 class Crawler (object):
     ori=''
     fail_txt=''
+    result_txt=''
     goods = []
     details = []
     fails = []
     ori_data = []
     #初始化导入文件
-    def __init__(self,ori,fail_txt,goods=[],details=[],fails=[],ori_data=[]):
+    def __init__(self,ori,fail_txt,result_txt,goods=[],details=[],fails=[],ori_data=[]):
         self.ori = ori
         self.fail_txt = fail_txt
+        self.result_txt = result_txt
     #处理txt中的数据
     def handle(self):
         try:
@@ -45,14 +51,15 @@ class Crawler (object):
         # urllib2.install_opener(opener)
         i_headers = {'User-Agent':'Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/31.0.1650.48'}
         req = urllib2.Request(url,headers=i_headers)
-        html = urllib2.urlopen(req)
+        html = urllib2.urlopen(req,data=None,timeout=10)
         if url == html.geturl():
             doc = html.read()
             return doc
         return
     #连接redis
     def redis_connect(self):
-        conn = redis.Redis(host='192.168.2.31',port=7000,db=0)
+        #conn = redis.Redis(host='192.168.2.31',port=7000,db=0)
+        conn = redis.Redis(host='192.168.2.135',port=6379,db=0)
         return conn
     #根据所获取的网页内容获取所需字段
     def wp_html_crwal(self):
@@ -69,10 +76,14 @@ class Crawler (object):
                 url = ori_line[3]
                 redis_text = url.split("-")[3]
                 wp_id = "wp_"+redis_text.split(".")[0]
+                #print wp_id
                 try:
                     doc = self.url_parse(url)
-                    if r.exists(wp_id):
-                        item_info=r.get(wp_id)
+                    if r.hexists(wp_id,'price'):
+                        item_info=r.hgetall(wp_id)
+                        # print item_info
+                        # print item_info['price']
+                        # print hlen(item_info)
                     else:
                         soup = BeautifulSoup(doc, "html.parser")
                         name_list_table = soup.find_all("script")
@@ -84,10 +95,19 @@ class Crawler (object):
                             brand_detail = brand + detail
                         else:
                             brand_detail = soup.find_all("p",class_="pib-title-detail")[0].string.strip()
-                        category_top_text = soup.find_all("div",class_="M-class")[0]
-                        category_top = category_top_text.find_all(href=re.compile("html"))[0].string
+                        if(soup.find_all("div",class_="M-class")):
+                            category_top_text = soup.find_all("div",class_="M-class")[0]
+                            category_top = category_top_text.find_all(href=re.compile("html"))[0].string
+                        else:
+                            category_top_text = soup.find_all("div",class_="bt_crumbs")[0]
+                            if (category_top_text.find_all(href=re.compile("html"))):
+                                category_top = category_top_text.find_all(href=re.compile("html"))[0].string
+                            else:
+                                category_top = category_top_text.find_all("a")[1].string or 'null'
                         category_regex = re.compile('\'category_name\'.*')
                         price_regex = re.compile('\'vipshop_price\'.*')
+                        # number_rule = re.compile(r'^[0-9]+[\.][0-9]+$')
+                        # number_rule1 = re.compile(r'^[0-9]+$')
                         if len(name_list_table) == 26:
                             category_text = category_regex.findall(name_list_table[5].string)[0]
                             price_text = price_regex.findall(name_list_table[5].string)[0]
@@ -96,19 +116,34 @@ class Crawler (object):
                             price_text = price_regex.findall(name_list_table[-3].string)[0]
                         category_sec = category_text.split('\'')[3]
                         price = price_text.split('\'')[3]
-                        item_info=category_top+","+category_sec+","+brand_detail+","+price
-                        r.set(wp_id,item_info)
-                    items = item_info.split(",")
+                        item_info = {'brand_detail':brand_detail,'category_sec':category_sec,'category_top':category_top,'price':price}
+                        # print item_info
+                        r.hmset(wp_id,item_info)
+                    #     print price
+                    #     if re.match(number_rule,price) or re.match(number_rule1,price):
+                    #         try:
+                    #             item_info=(category_top,category_sec,brand_detail,price)
+                    #             r.hset(wp_id,category_top,category_sec,brand_detail,price)
+                    #         except:
+                    #             print url,price,category_top,category_sec,brand_detail
+                    #     else:
+                    #         print url,price,category_top,category_sec,brand_detail
+                    #         break
+                    # # items = item_info
+                    # print type(item_info)
+                    # print items[3]
                     #item_id_text = url.split("-")[2]
                     #item_id = item_id_text.split(".")[0]
-                    id_regex = re.compile('(\d{9})')
+                    id_regex = re.compile('(\d{8,})')
                     item_id = id_regex.findall(url)[0]
+                    #print item_id
                     now = datetime.datetime.now()
-                    self.goods.append((item_id,time,mac,user_mac,url,"vip",items[2],items[1],items[0]))
-                    self.details.append((item_id,now,items[3]))
+                    self.goods.append((item_id,time,mac,user_mac,url,"vip",item_info['brand_detail'],item_info['category_sec'],item_info['category_top']))
+                    self.details.append((item_id,now,item_info['price']))
                 except Exception as e:
-                    print traceback.print_exc()
-                    self.fails.append([time+' '+mac+' '+user_mac+' '+url])
+                    # print traceback.print_exc()
+                    # print url
+                    self.fails.append([time+' '+mac+' '+user_mac+' '+url+' '+bytes(e)])
                     pass
     #多线程处理
     def thread_handle(self):
@@ -123,29 +158,48 @@ class Crawler (object):
                 thread.start()
                 threads.append(thread)
                 time.sleep(SLEEP_TIME)
+    def multi_process(self):
+        processes = []
+        num_cpus = multiprocessing.cpu_count()
+        for i in range(5):
+            p = multiprocessing.Process(target=self.thread_handle)
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+
     #将失败的数据输出到文件中
     def write_file(self,filename):
         with open(filename, 'a') as f:
             while self.fails:
                 f.write(self.fails.pop()[0]+'\n')
+    def write_result(self,filename):
+         with open(filename, 'a') as f:
+            while self.details and self.goods:
+                f.write(self.goods.pop().__str__()+' '+self.details.pop().__str__()+'\n')
     #插入数据进数据库中
-    def insert_Mysql(self,goods,details):
-        conn = MySQLdb.connect(host='localhost',port=3306,user='lcube',passwd='123456',db='bigdata',charset='utf8')
-        cur = conn.cursor()
-        sql1="insert into goods(item_id,time,mac,user_mac,url,ec_platform,item_name,category1,category2) values(%s,%s,%s,%s,%s,%s,%s,%s,%s)"
-        sql2="insert into wp_goods_detail(item_id,crawler_time,price) values(%s,%s,%s)"
-        cur.executemany(sql1,goods)
-        cur.executemany(sql2,details)
-        cur.close()
-        conn.commit()
-        conn.close()
+    # def insert_Mysql(self,goods,details):
+    #     conn = MySQLdb.connect(host='localhost',port=3306,user='lcube',passwd='123456',db='bigdata',charset='utf8')
+    #     cur = conn.cursor()
+    #     sql1="insert into goods_test(item_id,time,mac,user_mac,url,ec_platform,item_name,category1,category2) values(%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    #     sql2="insert into wp_goods_detail(item_id,crawler_time,price) values(%s,%s,%s)"
+    #     try:
+    #         cur.executemany(sql1,goods)
+    #         cur.executemany(sql2,details)
+    #         cur.close()
+    #         conn.commit()
+    #     except Exception as e:
+    #         print traceback.print_exc()
+    #         conn.rollback()
+    #     conn.close()
 
 if __name__ == '__main__':
-    c = Crawler('base_databi','failbi.txt')
+    c = Crawler('wp_origin1','fail.txt','result.txt')
     c.handle()
     #pdb.set_trace()
     #r = c.redis_connect()
     #goods,details = c.wp_html_crwal(data,c.fail)
-    c.thread_handle()
+    c.multi_process()
     c.write_file(c.fail_txt)
-    c.insert_Mysql(c.goods,c.details)
+    c.write_result(c.result_txt)
+    # c.insert_Mysql(c.goods,c.details)
